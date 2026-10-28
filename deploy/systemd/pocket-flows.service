@@ -1,0 +1,23 @@
+[Unit]
+Description=Pocket Flows — automations for your Pocket apps
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pocket-flows
+Group=pocket-flows
+ExecStart=/usr/local/bin/pocket-flows
+Environment=DATA_DIR=/var/lib/pocket-flows
+Environment=PORT=8080
+Environment=BASE_URL=https://flows.example.com
+Environment=SECURE_COOKIES=true
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pocket-flows
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

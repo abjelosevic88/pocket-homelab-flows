@@ -1,0 +1,26 @@
+# Pocket Flows — automations for your Pocket apps (Go + SQLite). One container, one volume.
+services:
+  pocket-flows:
+    image: ghcr.io/abjelosevic88/pocket-homelab-flows:latest
+    container_name: pocket-flows
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      TZ: ${TZ:-Europe/Berlin}
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      # SECURE_COOKIES: "true"          # behind HTTPS
+      # First admin (only used while the database has no users):
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # The owner's notifications and AI key; everything can also be set under Settings.
+      NOTIFY_URL: ${NOTIFY_URL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Pocket Core: one sign-in, events from your Pocket apps and app links.
+      # CORE_URL: http://pocket-core:8080
+      # CORE_REGISTRATION_KEY: ${CORE_REGISTRATION_KEY}
+    volumes:
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
+      - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

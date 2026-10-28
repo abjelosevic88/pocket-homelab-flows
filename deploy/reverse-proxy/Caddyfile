@@ -1,0 +1,7 @@
+# Pocket Flows behind Caddy. Linked apps send their own bearer token to /api/*;
+# webhook flows are called at /hooks/<secret> (no login: the address is the secret).
+flows.example.com {
+	reverse_proxy pocket-flows:8080 {
+		flush_interval -1
+	}
+}
