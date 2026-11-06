@@ -15,6 +15,7 @@ import (
 	"time"
 
 	core "github.com/abjelosevic88/pocket-homelab-core/sdk"
+	"github.com/abjelosevic88/pocket-homelab-flows/internal/catalog"
 	"github.com/abjelosevic88/pocket-homelab-flows/internal/config"
 	"github.com/abjelosevic88/pocket-homelab-flows/internal/store"
 )
@@ -234,6 +235,39 @@ func TestEventsStartOnlyTheOwnersFlows(t *testing.T) {
 	_, _, evs = a.call(a.alice, "GET", "/api/v1/events", nil)
 	if len(evs) != 2 {
 		t.Fatal("a Flows event was recorded")
+	}
+}
+
+// Pocket Forms answers start flows: Flows asks for events:read in Forms, and
+// a flow reads the answer's fields and role keys.
+func TestFormsAnswerStartsAFlow(t *testing.T) {
+	if !strings.Contains(fmt.Sprint(linkUses()), "forms [events:read]") || catalog.TopicName("forms.response_received") == "" {
+		t.Fatalf("Forms is not in the catalog: %v", linkUses())
+	}
+	a := newApp(t, nil)
+	sk, url := newSink(t)
+	f := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": "Briefs", "trigger_kind": "event",
+		"trigger": map[string]any{"topic": "forms.response_received", "conditions": []map[string]string{{"field": "form_title", "op": "equals", "value": "Client brief"}}},
+		"steps":   []map[string]any{{"kind": "http", "config": map[string]string{"method": "POST", "url": url, "body": "{{name}} <{{email}}> {{budget}} {{fields.q2}} {{response_url}}"}}}})
+	ctx := context.Background()
+	send := func(id int64, title string) {
+		p, _ := json.Marshal(map[string]any{"user_email": "alice@example.com", "form_id": 4, "form_title": title, "response_id": 31, "number": 12,
+			"name": "Marko", "email": "marko@example.com", "budget": "5000", "answers": map[string]any{"Budget": "5000", "What do you need?": "A shop"},
+			"fields": map[string]any{"q1": "5000", "q2": "A shop"}, "response_url": "https://forms.example/answers/31"})
+		a.s.handleEvent(ctx, core.Event{ID: id, Topic: "forms.response_received", Source: "forms", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	}
+	send(1, "Client brief")
+	send(2, "Feedback")
+	_, _, l := a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", int64(numOf(f, "id"))), nil)
+	if len(l) != 1 {
+		t.Fatalf("the flow ran %d times, want 1", len(l))
+	}
+	a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+	if got := sk.got(); len(got) != 1 || got[0] != "Marko <marko@example.com> 5000 A shop https://forms.example/answers/31" {
+		t.Fatalf("got %q", got)
+	}
+	if r := a.ok(a.alice, "POST", "/api/v1/recipes/form-answer-push", nil); r["enabled"] != false {
+		t.Fatalf("recipe: %v", r)
 	}
 }
 

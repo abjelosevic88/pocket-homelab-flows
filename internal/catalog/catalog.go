@@ -149,6 +149,8 @@ var Apps = []App{
 	{"monitoring", "Pocket Monitoring", "activity", []Topic{
 		{"monitoring.alert", "A server alert went off"}, {"monitoring.resolved", "A server alert cleared"}, {"monitoring.server_added", "A server was added"}, {"monitoring.server_removed", "A server was removed"}}},
 	{"backups", "Pocket Backups", "database", []Topic{{"backups.run.finished", "A backup finished"}, {"backups.run.failed", "A backup failed"}}},
+	{"forms", "Pocket Forms", "list", []Topic{
+		{"forms.response_received", "Someone answered a form"}, {"forms.form_opened", "A form was opened for answers"}, {"forms.form_closed", "A form closed"}}},
 	{"ai", "Pocket AI", "sparkles", []Topic{{"ai.turn_finished", "Pocket AI finished a reply"}, {"ai.needs_input", "Pocket AI needs your answer"}, {"ai.schedule_attention", "A scheduled AI run needs attention"}}},
 }
 
