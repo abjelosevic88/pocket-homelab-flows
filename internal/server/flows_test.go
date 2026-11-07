@@ -305,6 +305,40 @@ func TestCRMDealWonStartsAFlow(t *testing.T) {
 	}
 }
 
+// Pocket League games start flows: Flows asks for events:read in League, a
+// new flow knows a game's fields before the first event, and a game short of
+// players fills in the group, the counts and the time.
+func TestLeagueShortStartsAFlow(t *testing.T) {
+	if !strings.Contains(fmt.Sprint(linkUses()), "league [events:read]") || catalog.TopicName("league.short") == "" || catalog.TopicName("league.game_planned") == "" {
+		t.Fatalf("League is not in the catalog: %v", linkUses())
+	}
+	a := newApp(t, nil)
+	fl := a.ok(a.alice, "GET", "/api/v1/flows/fields?kind=event&topic=league.game_planned", nil)
+	if got := fmt.Sprint(fl["fields"]); !strings.Contains(got, "venue") || !strings.Contains(got, "starts_at") || !strings.Contains(got, "event.topic") {
+		t.Fatalf("fields before the first event: %v", got)
+	}
+	sk, url := newSink(t)
+	f := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": "Short", "trigger_kind": "event",
+		"trigger": map[string]any{"topic": "league.short"},
+		"steps":   []map[string]any{{"kind": "http", "config": map[string]string{"method": "POST", "url": url, "body": "{{group}} {{in}}/{{needed}} {{starts_at | date: DD.MM. HH:mm}} {{url}}"}}}})
+	p, _ := json.Marshal(map[string]any{"user_email": "alice@example.com", "game_id": 31, "group": "Tuesday Tennis", "starts_at": "2026-11-10T20:00",
+		"in": 3, "needed": 4, "url": "https://league.example/games/31"})
+	a.s.handleEvent(context.Background(), core.Event{ID: 1, Topic: "league.short", Source: "league", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	_, _, l := a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", int64(numOf(f, "id"))), nil)
+	if len(l) != 1 {
+		t.Fatalf("the flow ran %d times, want 1", len(l))
+	}
+	a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+	if got := sk.got(); len(got) != 1 || got[0] != "Tuesday Tennis 3/4 10.11. 20:00 https://league.example/games/31" {
+		t.Fatalf("got %q", got)
+	}
+	for _, key := range []string{"league-short-push", "league-planned-push"} {
+		if r := a.ok(a.alice, "POST", "/api/v1/recipes/"+key, nil); r["enabled"] != false {
+			t.Fatalf("recipe %s: %v", key, r)
+		}
+	}
+}
+
 // Steps run in order, fill in placeholders, filters stop quietly, and a
 // failing address is retried later instead of failing at once.
 func TestEngine(t *testing.T) {

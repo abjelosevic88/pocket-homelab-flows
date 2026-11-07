@@ -156,6 +156,10 @@ var Apps = []App{
 	{"crm", "Pocket CRM", "trending-up", []Topic{
 		{"crm.deal_created", "A deal was added"}, {"crm.deal_moved", "A deal moved to another stage"}, {"crm.deal_won", "A deal was won"}, {"crm.deal_lost", "A deal was lost"},
 		{"crm.steps_due", "Deal steps are due today (each morning)"}}},
+	{"league", "Pocket League", "trophy", []Topic{
+		{"league.game_planned", "A game was planned"}, {"league.game_changed", "A game moved to another time"}, {"league.game_cancelled", "A game was cancelled"},
+		{"league.vote_started", "A vote on the time of a game started"}, {"league.answered", "You said whether you are coming"},
+		{"league.short", "A game is short of players (the day before)"}, {"league.reminder", "A game is tomorrow (the day before)"}, {"league.result", "A result was entered"}}},
 	{"ai", "Pocket AI", "sparkles", []Topic{{"ai.turn_finished", "Pocket AI finished a reply"}, {"ai.needs_input", "Pocket AI needs your answer"}, {"ai.schedule_attention", "A scheduled AI run needs attention"}}},
 }
 
@@ -171,7 +175,22 @@ var topicFields = map[string][]string{
 	"crm.deal_won":     dealFields,
 	"crm.deal_lost":    dealFields,
 	"crm.steps_due":    {"date", "due", "overdue", "quiet", "text", "user_email"},
+
+	// Pocket League: starts_at is the game's wall-clock time (2026-11-10T20:00),
+	// url opens the game
+	"league.game_planned":   gameFields,
+	"league.game_changed":   gameFields,
+	"league.game_cancelled": gameFields,
+	"league.vote_started":   gameFields,
+	"league.answered":       {"game_id", "group", "starts_at", "answer", "url", "user_email"},
+	"league.short":          {"game_id", "group", "starts_at", "in", "needed", "url", "user_email"},
+	"league.reminder":       {"game_id", "group", "starts_at", "url", "user_email"},
+	"league.result":         {"match_id", "group_id", "group", "sport", "text", "played_at", "url", "user_email"},
 }
+
+// gameFields are what a Pocket League game planned, moved, cancelled or put
+// to a vote carries.
+var gameFields = []string{"game_id", "group_id", "group", "sport", "starts_at", "venue", "status", "url", "user_email"}
 
 // TopicFields are the fields an event is known to carry, sorted (nil when
 // not written down: they come from the newest event then).
