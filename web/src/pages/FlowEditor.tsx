@@ -401,7 +401,7 @@ function StepField({ f, value, onChange, fields }: { f: FieldDef; value: string;
   return (
     <Field group label={label} help={f.help}>
       <div className="field-wrap">
-        {multi ? <textarea ref={ref} value={value} onChange={e => onChange(e.target.value)} placeholder={f.type === 'keyvalue' ? 'Authorization: Bearer …' : f.placeholder} rows={f.type === 'keyvalue' ? 2 : 3} />
+        {multi ? <textarea ref={ref} value={value} onChange={e => onChange(e.target.value)} placeholder={f.placeholder || (f.type === 'keyvalue' ? 'Authorization: Bearer …' : '')} rows={f.type === 'keyvalue' ? 2 : 3} />
           : <input ref={ref} value={value} onChange={e => onChange(e.target.value)} placeholder={f.placeholder} />}
         {!f.no_template && <Placeholders fields={fields} onPick={insert} />}
       </div>

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -45,7 +46,7 @@ func (s *Server) doStep(ctx context.Context, r *store.Run, f *store.Flow, step s
 		return nil, "", err
 	}
 	idem := map[string]string{"Idempotency-Key": fmt.Sprintf("flows-run-%d-%s-%d", r.ID, step.ID, r.Step)}
-	return s.stepApp(ctx, sib, step.Kind, cfg, r, step, idem)
+	return s.stepApp(ctx, sib, step.Kind, cfg, v, r, step, idem)
 }
 
 func (s *Server) stepNotify(ctx context.Context, cfg map[string]string, st store.Settings) (map[string]any, string, error) {
@@ -235,7 +236,7 @@ func pick(m map[string]any, keys ...string) map[string]any {
 	return out
 }
 
-func (s *Server) stepApp(ctx context.Context, sib *siblingConn, kind string, cfg map[string]string, r *store.Run, step store.Step, idem map[string]string) (map[string]any, string, error) {
+func (s *Server) stepApp(ctx context.Context, sib *siblingConn, kind string, cfg map[string]string, v flow.Vars, r *store.Run, step store.Step, idem map[string]string) (map[string]any, string, error) {
 	c := sib.client
 	var resp map[string]any
 	via := ""
@@ -372,8 +373,45 @@ func (s *Server) stepApp(ctx context.Context, sib *siblingConn, kind string, cfg
 		}
 		is := unwrap(resp, "issue")
 		return pick(is, "id", "identifier", "title"), "Issue " + firstNonEmpty(flow.Text(is["identifier"]), "") + " created" + via, nil
+	case "tables.add":
+		id, ok := intConfig(step.Config["table_id"])
+		if !ok {
+			return nil, "", permanent("choose a table")
+		}
+		values := rowValues(step.Config["values"], v)
+		if len(values) == 0 {
+			return nil, "", permanent("fill in at least one field (Field name: value)")
+		}
+		// ref: a retry of this step finds the row it already added
+		body := map[string]any{"values": values, "typecast": true, "ref": fmt.Sprintf("pocket-flows:%d:%s", r.ID, step.ID)}
+		if err := c.Do(ctx, http.MethodPost, fmt.Sprintf("/api/v1/tables/%d/records", id), body, idem, &resp); err != nil {
+			return nil, "", err
+		}
+		out := pick(unwrap(resp, "record"), "id", "number", "title")
+		if rid := flow.Text(out["id"]); rid != "" && sib.public != "" {
+			out["url"] = strings.TrimRight(sib.public, "/") + "/r/" + rid
+		}
+		return out, "Row added: " + flow.Preview(firstNonEmpty(flow.Text(out["title"]), "#"+flow.Text(out["number"])), 80) + via, nil
 	}
 	return nil, "", permanent("unknown step %q", kind)
+}
+
+// rowValues reads "Field name: value" lines into a row's values, each value
+// filled in on its own (so a value with line breaks stays in its field).
+// Empty values are left out.
+func rowValues(raw string, v flow.Vars) map[string]any {
+	out := map[string]any{}
+	for _, line := range strings.Split(raw, "\n") {
+		k, val, ok := strings.Cut(line, ":")
+		name := strings.TrimSpace(flow.Render(k, v))
+		if !ok || name == "" {
+			continue
+		}
+		if text := strings.TrimSpace(flow.Render(val, v)); text != "" {
+			out[name] = text
+		}
+	}
+	return out
 }
 
 // ---- pickers ----
@@ -404,6 +442,27 @@ func (s *Server) pickerOptions(ctx context.Context, u *store.User, st store.Sett
 				break
 			}
 		}
+	}
+	if p.Nested != "" {
+		// each item holds the choices (a base with its tables): "Base · Table"
+		var flat []any
+		for _, it := range list {
+			m, ok := it.(map[string]any)
+			if !ok {
+				continue
+			}
+			inner, _ := m[p.Nested].([]any)
+			for _, x := range inner {
+				if c, ok := x.(map[string]any); ok {
+					c = maps.Clone(c)
+					if parent, name := flow.Text(m["name"]), flow.Text(c["name"]); parent != "" && name != "" {
+						c["name"] = parent + " · " + name
+					}
+					flat = append(flat, c)
+				}
+			}
+		}
+		list = flat
 	}
 	out := []catalog.Option{}
 	for _, it := range list {

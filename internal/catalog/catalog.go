@@ -57,18 +57,22 @@ type Picker struct {
 	Scope string
 	Path  string
 	Value string // the field used as the value ("id", "key")
+	// Nested, when set, is the list inside each item that holds the choices
+	// (Pocket Tables: bases, each with its tables): labelled "Base · Table".
+	Nested string
 }
 
 // Pickers by name.
 var Pickers = map[string]Picker{
-	"tasks.lists":        {"tasks", "tasks:read", "/api/v1/lists", "id"},
-	"calendar.calendars": {"calendar", "calendar:read", "/api/v1/calendars", "id"},
-	"money.accounts":     {"money", "accounts:read", "/api/v1/accounts", "id"},
-	"money.categories":   {"money", "accounts:read", "/api/v1/categories", "id"},
-	"habits.habits":      {"habits", "habits:read", "/api/v1/habits", "id"},
-	"inventory.items":    {"inventory", "items:read", "/api/v1/items", "id"},
-	"projects.teams":     {"projects", "projects:read", "/api/v1/teams", "key"},
-	"notes.folders":      {"notes", "notes:read", "/api/v1/folders", "path"},
+	"tasks.lists":        {"tasks", "tasks:read", "/api/v1/lists", "id", ""},
+	"calendar.calendars": {"calendar", "calendar:read", "/api/v1/calendars", "id", ""},
+	"money.accounts":     {"money", "accounts:read", "/api/v1/accounts", "id", ""},
+	"money.categories":   {"money", "accounts:read", "/api/v1/categories", "id", ""},
+	"habits.habits":      {"habits", "habits:read", "/api/v1/habits", "id", ""},
+	"inventory.items":    {"inventory", "items:read", "/api/v1/items", "id", ""},
+	"projects.teams":     {"projects", "projects:read", "/api/v1/teams", "key", ""},
+	"notes.folders":      {"notes", "notes:read", "/api/v1/folders", "path", ""},
+	"tables.tables":      {"tables", "tables:read", "/api/v1/bases", "id", "tables"},
 }
 
 // Apps are the Pocket apps whose events Flows can listen to (through an
@@ -160,6 +164,9 @@ var Apps = []App{
 		{"league.game_planned", "A game was planned"}, {"league.game_changed", "A game moved to another time"}, {"league.game_cancelled", "A game was cancelled"},
 		{"league.vote_started", "A vote on the time of a game started"}, {"league.answered", "You said whether you are coming"},
 		{"league.short", "A game is short of players (the day before)"}, {"league.reminder", "A game is tomorrow (the day before)"}, {"league.result", "A result was entered"}}},
+	{"tables", "Pocket Tables", "table", []Topic{
+		{"tables.record_created", "A row was added to a table"}, {"tables.record_updated", "A row in a table changed"}, {"tables.record_deleted", "A row was deleted from a table"},
+		{"tables.reminder", "A row's reminder date is today (each morning)"}}},
 	{"ai", "Pocket AI", "sparkles", []Topic{{"ai.turn_finished", "Pocket AI finished a reply"}, {"ai.needs_input", "Pocket AI needs your answer"}, {"ai.schedule_attention", "A scheduled AI run needs attention"}}},
 }
 
@@ -186,7 +193,19 @@ var topicFields = map[string][]string{
 	"league.short":          {"game_id", "group", "starts_at", "in", "needed", "url", "user_email"},
 	"league.reminder":       {"game_id", "group", "starts_at", "url", "user_email"},
 	"league.result":         {"match_id", "group_id", "group", "sport", "text", "played_at", "url", "user_email"},
+
+	// Pocket Tables: table and base are names, values each field's value as
+	// text by field name ({{values.Status}}); changed lists the field names
+	// that changed, changes each with before and after
+	"tables.record_created": rowFields,
+	"tables.record_updated": append([]string{"changed", "changes"}, rowFields...),
+	"tables.record_deleted": rowFields,
+	"tables.reminder":       {"table_id", "table", "base", "record_id", "title", "field", "date", "url", "user_email"},
 }
+
+// rowFields are what a Pocket Tables row added, changed or deleted carries;
+// url opens the row.
+var rowFields = []string{"table_id", "table", "base", "record_id", "title", "number", "values", "url", "user_email"}
 
 // gameFields are what a Pocket League game planned, moved, cancelled or put
 // to a vote carries.
@@ -326,6 +345,14 @@ var Steps = []StepKind{
 			{Key: "priority", Label: "Priority", Type: "select", Options: []Option{{"0", "None"}, {"1", "Urgent"}, {"2", "High"}, {"3", "Medium"}, {"4", "Low"}}, Default: "0", NoTemplate: true},
 		},
 		Output: []string{"id", "identifier"}},
+	{Kind: "tables.add", App: "tables", Name: "Add a row to a table", Icon: "table", Scopes: []string{"tables:write", "tables:read"},
+		Description: "A row in one of your tables in Pocket Tables. Fill in the fields by their names; values are read the way you would type them there (dates, numbers, choices).",
+		Fields: []Field{
+			{Key: "table_id", Label: "Table", Type: "picker", Picker: "tables.tables", Required: true, NoTemplate: true},
+			{Key: "values", Label: "Values", Type: "keyvalue", Required: true, Placeholder: "Name: {{name}}\nStatus: New",
+				Help: "One field per line: Field name: value. Fields not in the table are left out."},
+		},
+		Output: []string{"id", "number", "title", "url"}},
 }
 
 // StepByKind finds a step kind.

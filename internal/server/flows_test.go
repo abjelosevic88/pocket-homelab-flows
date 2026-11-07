@@ -339,6 +339,86 @@ func TestLeagueShortStartsAFlow(t *testing.T) {
 	}
 }
 
+// Pocket Tables rows start flows and flows add rows: Flows asks for
+// events:read, tables:write and tables:read in Tables, a new flow knows a
+// row's fields before the first event, conditions read the table, the
+// changed fields and a value by field name, and "Add a row to a table" picks
+// the table from the bases and sends the values by field name.
+func TestTablesRowStartsAFlowAndAddsARow(t *testing.T) {
+	if !strings.Contains(fmt.Sprint(linkUses()), "tables [events:read tables:write tables:read]") || catalog.TopicName("tables.record_updated") == "" || catalog.TopicName("tables.reminder") == "" {
+		t.Fatalf("Tables is not in the catalog: %v", linkUses())
+	}
+	var mu sync.Mutex
+	var got []map[string]any
+	tables := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/bases":
+			_, _ = w.Write([]byte(`[{"id": 1, "name": "Home", "tables": [{"id": 4, "name": "Bookings"}, {"id": 5, "name": "Guests"}]}, {"id": 2, "name": "Empty", "tables": []}]`))
+		case r.Method == "POST" && r.URL.Path == "/api/v1/tables/5/records":
+			var in map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			got = append(got, in)
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id": 77, "table_id": 5, "number": 12, "title": "Marko", "values": {}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(tables.Close)
+	a := newApp(t, nil)
+	a.ok(a.alice, "PUT", "/api/v1/settings", map[string]any{"connections": map[string]any{"tables": map[string]any{"mode": "direct", "url": tables.URL, "token": "pt_tables_token_1"}}})
+	pk := a.ok(a.alice, "GET", "/api/v1/pickers?name=tables.tables", nil)
+	if o := fmt.Sprint(pk["options"]); pk["ok"] != true || !strings.Contains(o, "map[label:Home · Bookings value:4]") || !strings.Contains(o, "map[label:Home · Guests value:5]") || strings.Contains(o, "Empty") {
+		t.Fatalf("tables to pick from: %v", pk)
+	}
+	fl := a.ok(a.alice, "GET", "/api/v1/flows/fields?kind=event&topic=tables.record_updated", nil)
+	if got := fmt.Sprint(fl["fields"]); !strings.Contains(got, "changed") || !strings.Contains(got, "values") || !strings.Contains(got, "table") || !strings.Contains(got, "event.topic") {
+		t.Fatalf("fields before the first event: %v", got)
+	}
+	f := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": "Confirmed bookings to guests", "trigger_kind": "event",
+		"trigger": map[string]any{"topic": "tables.record_updated", "conditions": []map[string]string{
+			{"field": "table", "op": "equals", "value": "Bookings"}, {"field": "changed", "op": "contains", "value": "Status"}, {"field": "values.Status", "op": "equals", "value": "Confirmed"}}},
+		"steps": []map[string]any{{"id": "s1", "kind": "tables.add", "config": map[string]string{"table_id": "5",
+			"values": "Name: {{values.Guest}}\nNotes: {{values.Notes}}\nArrives: {{values.Check-in}}\nEmpty: {{values.Nothing}}\nno colon here"}}}})
+	ev := func(id int64, table, status string) {
+		p, _ := json.Marshal(map[string]any{"user_email": "alice@example.com", "table_id": 4, "table": table, "base": "Home", "record_id": 9, "title": "Marko", "number": 3,
+			"values":  map[string]any{"Guest": "Marko", "Status": status, "Check-in": "2026-11-20", "Notes": "late\narrival"},
+			"changed": []string{"Status"}, "changes": []map[string]string{{"field": "Status", "before": "New", "after": status}}, "url": "https://tables.example/r/9"})
+		a.s.handleEvent(context.Background(), core.Event{ID: id, Topic: "tables.record_updated", Source: "tables", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	}
+	ev(1, "Bookings", "New")
+	ev(2, "Guests", "Confirmed")
+	ev(3, "Bookings", "Confirmed")
+	_, _, l := a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", int64(numOf(f, "id"))), nil)
+	if len(l) != 1 {
+		t.Fatalf("the flow ran %d times, want 1", len(l))
+	}
+	run := a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+	if run["status"] != "ok" {
+		t.Fatalf("run: %v", run)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("rows added: %v", got)
+	}
+	body := got[0]
+	if fmt.Sprint(body["values"]) != "map[Arrives:2026-11-20 Name:Marko Notes:late\narrival]" || body["typecast"] != true || !strings.HasPrefix(fmt.Sprint(body["ref"]), "pocket-flows:") {
+		t.Fatalf("row sent: %#v", body)
+	}
+	if out := fmt.Sprint(run); !strings.Contains(out, tables.URL+"/r/77") {
+		t.Fatalf("the step's output has no link to the row: %v", out)
+	}
+	for _, key := range []string{"tables-row-push", "tables-reminder-push"} {
+		if r := a.ok(a.alice, "POST", "/api/v1/recipes/"+key, nil); r["enabled"] != false {
+			t.Fatalf("recipe %s: %v", key, r)
+		}
+	}
+}
+
 // Steps run in order, fill in placeholders, filters stop quietly, and a
 // failing address is retried later instead of failing at once.
 func TestEngine(t *testing.T) {
