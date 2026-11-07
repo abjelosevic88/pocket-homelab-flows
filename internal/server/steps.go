@@ -392,6 +392,36 @@ func (s *Server) stepApp(ctx context.Context, sib *siblingConn, kind string, cfg
 			out["url"] = strings.TrimRight(sib.public, "/") + "/r/" + rid
 		}
 		return out, "Row added: " + flow.Preview(firstNonEmpty(flow.Text(out["title"]), "#"+flow.Text(out["number"])), 80) + via, nil
+	case "rentals.repair":
+		id, ok := intConfig(step.Config["property_id"])
+		if !ok {
+			return nil, "", permanent("choose a place")
+		}
+		title := flow.Preview(strings.TrimSpace(cfg["title"]), 200)
+		if title == "" {
+			return nil, "", permanent("say what needs fixing")
+		}
+		prio := step.Config["priority"]
+		switch prio {
+		case "low", "normal", "urgent":
+		default:
+			prio = "normal"
+		}
+		body := map[string]any{"property_id": id, "title": title, "priority": prio}
+		if d := strings.TrimSpace(cfg["details"]); d != "" {
+			body["details"] = d
+		}
+		if who := strings.TrimSpace(cfg["reported_by"]); who != "" {
+			body["reported_by"] = who
+		}
+		if err := c.Do(ctx, http.MethodPost, "/api/v1/requests", body, idem, &resp); err != nil {
+			return nil, "", err
+		}
+		out := pick(unwrap(resp, "request"), "id", "title", "priority")
+		if rid := flow.Text(out["id"]); rid != "" && sib.public != "" {
+			out["url"] = strings.TrimRight(sib.public, "/") + "/repairs/" + rid
+		}
+		return out, "Repair reported: " + flow.Preview(firstNonEmpty(flow.Text(out["title"]), title), 80) + via, nil
 	}
 	return nil, "", permanent("unknown step %q", kind)
 }

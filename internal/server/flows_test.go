@@ -419,6 +419,101 @@ func TestTablesRowStartsAFlowAndAddsARow(t *testing.T) {
 	}
 }
 
+// Pocket Rentals starts flows and flows report repairs there: Flows asks for
+// events:read, rentals:write and rentals:read in Rentals, a new flow knows a
+// lease's and a late rent's fields before the first event, a late rent fills
+// in what is owed, and "Report a repair in Pocket Rentals" picks the place
+// and sends the repair (a form answer here).
+func TestRentalsStartsAFlowAndReportsARepair(t *testing.T) {
+	if !strings.Contains(fmt.Sprint(linkUses()), "rentals [events:read rentals:write rentals:read]") || catalog.TopicName("rentals.rent_late") == "" || catalog.TopicName("rentals.request_done") == "" {
+		t.Fatalf("Rentals is not in the catalog: %v", linkUses())
+	}
+	for _, topic := range []string{"rentals.rent_due", "rentals.rent_late", "rentals.payment_recorded", "rentals.lease_started", "rentals.lease_ending", "rentals.lease_ended", "rentals.request_created", "rentals.request_done"} {
+		if catalog.TopicName(topic) == "" || catalog.TopicFields(topic) == nil {
+			t.Fatalf("%s: no name or fields", topic)
+		}
+	}
+	var mu sync.Mutex
+	var got []map[string]any
+	rentals := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/properties":
+			_, _ = w.Write([]byte(`[{"id": 3, "name": "Linden Court"}, {"id": 4, "name": "Old flat", "archived": true}]`))
+		case r.Method == "POST" && r.URL.Path == "/api/v1/requests":
+			var in map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			got = append(got, in)
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"request": {"id": 21, "property_id": 3, "title": "Boiler is off", "priority": "urgent"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(rentals.Close)
+	a := newApp(t, nil)
+	a.ok(a.alice, "PUT", "/api/v1/settings", map[string]any{"connections": map[string]any{"rentals": map[string]any{"mode": "direct", "url": rentals.URL, "token": "pt_rentals_token_1"}}})
+	pk := a.ok(a.alice, "GET", "/api/v1/pickers?name=rentals.places", nil)
+	if o := fmt.Sprint(pk["options"]); pk["ok"] != true || !strings.Contains(o, "map[label:Linden Court value:3]") || strings.Contains(o, "Old flat") {
+		t.Fatalf("places to pick from: %v", pk)
+	}
+	fl := a.ok(a.alice, "GET", "/api/v1/flows/fields?kind=event&topic=rentals.lease_ending", nil)
+	if got := fmt.Sprint(fl["fields"]); !strings.Contains(got, "days_left") || !strings.Contains(got, "tenants") || !strings.Contains(got, "place") || !strings.Contains(got, "event.topic") {
+		t.Fatalf("fields before the first event: %v", got)
+	}
+
+	// a late rent fills in who owes how much
+	sk, url := newSink(t)
+	late := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": "Late", "trigger_kind": "event",
+		"trigger": map[string]any{"topic": "rentals.rent_late"},
+		"steps":   []map[string]any{{"kind": "http", "config": map[string]string{"method": "POST", "url": url, "body": "{{place}}: {{tenants}} owes {{owed | cents}} {{currency}} since {{due | date: DD.MM.}}"}}}})
+	p, _ := json.Marshal(map[string]any{"user_email": "alice@example.com", "lease_id": 5, "place": "Flat 2 · Linden Court", "tenants": "Ana Petrović",
+		"title": "Rent November", "due": "2026-11-01", "owed": 45000, "currency": "EUR", "url": "https://rentals.example/leases/5"})
+	a.s.handleEvent(context.Background(), core.Event{ID: 1, Topic: "rentals.rent_late", Source: "rentals", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	_, _, l := a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", int64(numOf(late, "id"))), nil)
+	if len(l) != 1 {
+		t.Fatalf("the late rent flow ran %d times, want 1", len(l))
+	}
+	a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+	if got := sk.got(); len(got) != 1 || got[0] != "Flat 2 · Linden Court: Ana Petrović owes 450.00 EUR since 01.11." {
+		t.Fatalf("got %q", got)
+	}
+
+	// a form answer reports a repair
+	f := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": "Repairs from a form", "trigger_kind": "event",
+		"trigger": map[string]any{"topic": "forms.response_received"},
+		"steps": []map[string]any{{"id": "s1", "kind": "rentals.repair", "config": map[string]string{"property_id": "3", "priority": "urgent",
+			"title": "  {{preview}}  ", "details": "{{preview}}\n{{email}}", "reported_by": "{{name}}"}}}})
+	p, _ = json.Marshal(map[string]any{"user_email": "alice@example.com", "form_title": "Report a repair", "number": 4, "name": "Ana", "email": "ana@example.com", "preview": "Boiler is off"})
+	a.s.handleEvent(context.Background(), core.Event{ID: 2, Topic: "forms.response_received", Source: "forms", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	_, _, l = a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", int64(numOf(f, "id"))), nil)
+	if len(l) != 1 {
+		t.Fatalf("the repair flow ran %d times, want 1", len(l))
+	}
+	run := a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+	if run["status"] != "ok" {
+		t.Fatalf("run: %v", run)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 {
+		t.Fatalf("repairs reported: %v", got)
+	}
+	if b := got[0]; numOf(b, "property_id") != 3 || b["title"] != "Boiler is off" || b["priority"] != "urgent" || b["details"] != "Boiler is off\nana@example.com" || b["reported_by"] != "Ana" {
+		t.Fatalf("repair sent: %#v", b)
+	}
+	if out := fmt.Sprint(run); !strings.Contains(out, rentals.URL+"/repairs/21") {
+		t.Fatalf("the step's output has no link to the repair: %v", out)
+	}
+	for _, key := range []string{"rent-late-push", "lease-ending-task", "urgent-repair-push"} {
+		if r := a.ok(a.alice, "POST", "/api/v1/recipes/"+key, nil); r["enabled"] != false {
+			t.Fatalf("recipe %s: %v", key, r)
+		}
+	}
+}
+
 // Steps run in order, fill in placeholders, filters stop quietly, and a
 // failing address is retried later instead of failing at once.
 func TestEngine(t *testing.T) {

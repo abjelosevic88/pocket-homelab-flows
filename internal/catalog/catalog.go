@@ -73,6 +73,7 @@ var Pickers = map[string]Picker{
 	"projects.teams":     {"projects", "projects:read", "/api/v1/teams", "key", ""},
 	"notes.folders":      {"notes", "notes:read", "/api/v1/folders", "path", ""},
 	"tables.tables":      {"tables", "tables:read", "/api/v1/bases", "id", "tables"},
+	"rentals.places":     {"rentals", "rentals:read", "/api/v1/properties", "id", ""},
 }
 
 // Apps are the Pocket apps whose events Flows can listen to (through an
@@ -167,6 +168,10 @@ var Apps = []App{
 	{"tables", "Pocket Tables", "table", []Topic{
 		{"tables.record_created", "A row was added to a table"}, {"tables.record_updated", "A row in a table changed"}, {"tables.record_deleted", "A row was deleted from a table"},
 		{"tables.reminder", "A row's reminder date is today (each morning)"}}},
+	{"rentals", "Pocket Rentals", "key", []Topic{
+		{"rentals.rent_due", "Rent is due today or in the next days (each morning)"}, {"rentals.rent_late", "Rent is late"}, {"rentals.payment_recorded", "A rent payment was recorded"},
+		{"rentals.lease_started", "A lease started"}, {"rentals.lease_ending", "A lease ends soon (30 and 7 days before, on the day, and when set in Rentals)"}, {"rentals.lease_ended", "A lease ended"},
+		{"rentals.request_created", "A repair was reported"}, {"rentals.request_done", "A repair was done"}}},
 	{"ai", "Pocket AI", "sparkles", []Topic{{"ai.turn_finished", "Pocket AI finished a reply"}, {"ai.needs_input", "Pocket AI needs your answer"}, {"ai.schedule_attention", "A scheduled AI run needs attention"}}},
 }
 
@@ -201,7 +206,28 @@ var topicFields = map[string][]string{
 	"tables.record_updated": append([]string{"changed", "changes"}, rowFields...),
 	"tables.record_deleted": rowFields,
 	"tables.reminder":       {"table_id", "table", "base", "record_id", "title", "field", "date", "url", "user_email"},
+
+	// Pocket Rentals: place is "Unit · Place", amounts are in cents
+	// ({{owed | cents}}); today, soon and late on rent_due are counts; tenants
+	// on a late rent or a payment are names in one line
+	"rentals.rent_due":         {"date", "today", "soon", "late", "url", "user_email"},
+	"rentals.rent_late":        {"lease_id", "place", "tenants", "title", "due", "owed", "currency", "url", "user_email"},
+	"rentals.payment_recorded": {"lease_id", "place", "tenants", "date", "amount", "currency", "url", "user_email"},
+	"rentals.lease_started":    leaseFields,
+	"rentals.lease_ending":     append([]string{"days_left"}, leaseFields...),
+	"rentals.lease_ended":      leaseFields,
+	"rentals.request_created":  repairFields,
+	"rentals.request_done":     repairFields,
 }
+
+// leaseFields are what a Pocket Rentals lease started, ending or ended
+// carries: tenants and emails are lists, start and end dates, rent in cents a
+// period (frequency), url opens the lease.
+var leaseFields = []string{"lease_id", "place", "property_id", "tenants", "emails", "start", "end", "rent", "currency", "frequency", "url", "user_email"}
+
+// repairFields are what a Pocket Rentals repair reported or done carries:
+// priority is low, normal or urgent, cost in cents, url opens the repair.
+var repairFields = []string{"request_id", "title", "place", "property_id", "priority", "status", "reported_by", "planned_on", "done_on", "cost", "currency", "url", "user_email"}
 
 // rowFields are what a Pocket Tables row added, changed or deleted carries;
 // url opens the row.
@@ -353,6 +379,16 @@ var Steps = []StepKind{
 				Help: "One field per line: Field name: value. Fields not in the table are left out."},
 		},
 		Output: []string{"id", "number", "title", "url"}},
+	{Kind: "rentals.repair", App: "rentals", Name: "Report a repair in Pocket Rentals", Icon: "wrench", Scopes: []string{"rentals:write", "rentals:read"},
+		Description: "A repair for one of your places in Pocket Rentals, the way a tenant would report it: what is wrong, how urgent, who said so. Rentals adds it to the place's timeline (and to your tasks, if you have it set to).",
+		Fields: []Field{
+			{Key: "property_id", Label: "Place", Type: "picker", Picker: "rentals.places", Required: true, NoTemplate: true},
+			{Key: "title", Label: "What needs fixing", Type: "text", Placeholder: "{{title}}", Required: true},
+			{Key: "details", Label: "Details", Type: "textarea", Placeholder: "{{preview}}"},
+			{Key: "priority", Label: "How urgent", Type: "select", Options: []Option{{"low", "Low"}, {"normal", "Normal"}, {"urgent", "Urgent"}}, Default: "normal", NoTemplate: true},
+			{Key: "reported_by", Label: "Reported by (optional)", Type: "text", Placeholder: "{{name}}", Help: "A tenant's name, or who told you."},
+		},
+		Output: []string{"id", "title", "priority", "url"}},
 }
 
 // StepByKind finds a step kind.
