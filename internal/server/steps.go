@@ -423,6 +423,59 @@ func (s *Server) stepApp(ctx context.Context, sib *siblingConn, kind string, cfg
 			out["url"] = strings.TrimRight(sib.public, "/") + "/repairs/" + rid
 		}
 		return out, "Repair reported: " + flow.Preview(firstNonEmpty(flow.Text(out["title"]), title), 80) + via, nil
+	case "trails.outing":
+		// the day: YYYY-MM-DD, or a date and time (2026-11-14T08:00) whose
+		// time is the start when none is given
+		date, at := strings.TrimSpace(cfg["date"]), strings.TrimSpace(cfg["start_time"])
+		if d, t, ok := strings.Cut(date, "T"); ok {
+			date = d
+			if at == "" {
+				at = t
+			}
+		}
+		if date == "" {
+			date = time.Now().Format("2006-01-02")
+		}
+		if _, err := time.Parse("2006-01-02", date); err != nil {
+			return nil, "", permanent("the day %q is not YYYY-MM-DD", cfg["date"])
+		}
+		if at != "" {
+			if len(at) > 5 {
+				at = at[:5] // 08:00:00 → 08:00
+			}
+			if _, err := time.Parse("15:04", at); err != nil {
+				return nil, "", permanent("the start time %q is not HH:MM", cfg["start_time"])
+			}
+		}
+		// source_ref: a retry of this step finds the outing it already planned
+		body := map[string]any{"date": date, "source_ref": fmt.Sprintf("pocket-flows:%d:%s", r.ID, step.ID)}
+		if id, ok := intConfig(step.Config["route_id"]); ok {
+			body["route_id"] = id
+		}
+		if at != "" {
+			body["start_time"] = at
+		}
+		if t := flow.Preview(strings.TrimSpace(cfg["title"]), 200); t != "" {
+			body["title"] = t
+		}
+		if a := strings.TrimSpace(step.Config["activity"]); a != "" {
+			body["activity"] = a
+		}
+		if n := strings.TrimSpace(cfg["notes"]); n != "" {
+			body["notes"] = n
+		}
+		if err := c.Do(ctx, http.MethodPost, "/api/v1/outings", body, idem, &resp); err != nil {
+			return nil, "", err
+		}
+		out := pick(unwrap(resp, "outing"), "id", "title", "date", "start_time", "status")
+		if oid := flow.Text(out["id"]); oid != "" && sib.public != "" {
+			out["url"] = strings.TrimRight(sib.public, "/") + "/outings/" + oid
+		}
+		line := "Outing planned for " + date
+		if t := flow.Text(out["title"]); t != "" {
+			line = "Outing planned: " + flow.Preview(t, 80) + " on " + date
+		}
+		return out, line + via, nil
 	}
 	return nil, "", permanent("unknown step %q", kind)
 }

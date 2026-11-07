@@ -538,6 +538,130 @@ func TestRentalsStartsAFlowAndReportsARepair(t *testing.T) {
 	}
 }
 
+// Pocket Trails starts flows and flows plan outings there: Flows asks for
+// events:read, trails:write and trails:read in Trails, a new flow knows an
+// outing's fields before the first event, "Not back in time" fills in who
+// was told, and "Plan an outing in Pocket Trails" picks a route and sends the
+// outing with a source_ref, so a retry gets the outing it already planned.
+func TestTrailsStartsAFlowAndPlansAnOuting(t *testing.T) {
+	if !strings.Contains(fmt.Sprint(linkUses()), "trails [events:read trails:write trails:read]") || catalog.TopicName("trails.overdue") != "Not back in time (your safety contact was emailed)" {
+		t.Fatalf("Trails is not in the catalog: %v", linkUses())
+	}
+	for _, topic := range []string{"trails.outing_planned", "trails.outing_today", "trails.outing_started", "trails.outing_done", "trails.outing_cancelled", "trails.overdue", "trails.route_saved"} {
+		if catalog.TopicName(topic) == "" || catalog.TopicFields(topic) == nil {
+			t.Fatalf("%s: no name or fields", topic)
+		}
+	}
+	var mu sync.Mutex
+	var got []map[string]any
+	trails := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/api/v1/routes":
+			_, _ = w.Write([]byte(`[{"id": 4, "name": "Trebević from Sarajevo", "activity": "hike"}, {"id": 5, "name": "Old loop", "archived": true}]`))
+		case r.Method == "POST" && r.URL.Path == "/api/v1/outings":
+			var in map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			got = append(got, in)
+			again := len(got) > 1 && got[0]["source_ref"] == in["source_ref"]
+			mu.Unlock()
+			if again {
+				// the same source_ref twice: the outing it already planned
+				_, _ = w.Write([]byte(`{"id": 12, "title": "Hike: Trebević from Sarajevo", "date": "2026-11-14", "start_time": "08:00", "status": "planned", "source": "flows"}`))
+				return
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id": 12, "title": "Hike: Trebević from Sarajevo", "date": "2026-11-14", "start_time": "08:00", "status": "planned", "source": "flows"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(trails.Close)
+	a := newApp(t, nil)
+	a.ok(a.alice, "PUT", "/api/v1/settings", map[string]any{"connections": map[string]any{"trails": map[string]any{"mode": "direct", "url": trails.URL, "token": "ptr_trails_token_1"}}})
+	pk := a.ok(a.alice, "GET", "/api/v1/pickers?name=trails.routes", nil)
+	if o := fmt.Sprint(pk["options"]); pk["ok"] != true || !strings.Contains(o, "map[label:Trebević from Sarajevo value:4]") || strings.Contains(o, "Old loop") {
+		t.Fatalf("routes to pick from: %v", pk)
+	}
+	fl := a.ok(a.alice, "GET", "/api/v1/flows/fields?kind=event&topic=trails.overdue", nil)
+	if got := fmt.Sprint(fl["fields"]); !strings.Contains(got, "back_by") || !strings.Contains(got, "contact_name") || !strings.Contains(got, "start_lat") || !strings.Contains(got, "event.topic") {
+		t.Fatalf("fields before the first event: %v", got)
+	}
+
+	// not back in time: who was told and when you were due
+	sk, url := newSink(t)
+	late := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": "Not back", "trigger_kind": "event",
+		"trigger": map[string]any{"topic": "trails.overdue"},
+		"steps":   []map[string]any{{"kind": "http", "config": map[string]string{"method": "POST", "url": url, "body": "{{title}}: due back {{back_by | date: HH:mm}}, {{contact_name}} was emailed ({{start_lat}}, {{start_lng}})"}}}})
+	p, _ := json.Marshal(map[string]any{"user_email": "alice@example.com", "outing_id": 12, "title": "Hike: Trebević from Sarajevo", "activity": "hike", "date": "2026-11-14",
+		"start_time": "08:00", "status": "out", "back_by": "2026-11-14T17:30", "contact_name": "Ana", "start_lat": 43.85, "start_lng": 18.43, "url": "https://trails.example/outings/12"})
+	a.s.handleEvent(context.Background(), core.Event{ID: 1, Topic: "trails.overdue", Source: "trails", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	_, _, l := a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", int64(numOf(late, "id"))), nil)
+	if len(l) != 1 {
+		t.Fatalf("the overdue flow ran %d times, want 1", len(l))
+	}
+	a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+	if got := sk.got(); len(got) != 1 || got[0] != "Hike: Trebević from Sarajevo: due back 17:30, Ana was emailed (43.85, 18.43)" {
+		t.Fatalf("got %q", got)
+	}
+
+	// a calendar event plans an outing on a route, its date and time from the event's start
+	f := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": "Hikes from the calendar", "trigger_kind": "event",
+		"trigger": map[string]any{"topic": "calendar.created"},
+		"steps": []map[string]any{{"id": "s1", "kind": "trails.outing", "config": map[string]string{"route_id": "4", "activity": "hike",
+			"date": "{{start}}", "title": "  {{title}}  ", "notes": "From the calendar: {{title}}"}}}})
+	p, _ = json.Marshal(map[string]any{"user_email": "alice@example.com", "title": "Trebević with Ana", "start": "2026-11-14T08:00"})
+	a.s.handleEvent(context.Background(), core.Event{ID: 2, Topic: "calendar.created", Source: "calendar", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	_, _, l = a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", int64(numOf(f, "id"))), nil)
+	if len(l) != 1 {
+		t.Fatalf("the outing flow ran %d times, want 1", len(l))
+	}
+	run := a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+	if run["status"] != "ok" {
+		t.Fatalf("run: %v", run)
+	}
+	mu.Lock()
+	if len(got) != 1 {
+		t.Fatalf("outings planned: %v", got)
+	}
+	if b := got[0]; numOf(b, "route_id") != 4 || b["date"] != "2026-11-14" || b["start_time"] != "08:00" || b["title"] != "Trebević with Ana" || b["activity"] != "hike" ||
+		b["notes"] != "From the calendar: Trebević with Ana" || b["source_ref"] != fmt.Sprintf("pocket-flows:%d:s1", int64(numOf(run, "id"))) {
+		t.Fatalf("outing sent: %#v", b)
+	}
+	mu.Unlock()
+	if out := fmt.Sprint(run); !strings.Contains(out, trails.URL+"/outings/12") {
+		t.Fatalf("the step's output has no link to the outing: %v", out)
+	}
+
+	// a retry sends the same source_ref; Trails answers 200 with the outing it
+	// already planned, and the step still succeeds with its link
+	cfg := map[string]string{"date": "", "start_time": "", "title": "", "notes": ""}
+	step := store.Step{ID: "s1", Kind: "trails.outing", Config: map[string]string{}}
+	sib := &siblingConn{client: pocket.New(trails.URL, "ptr_trails_token_1", 5*time.Second), public: trails.URL, via: modeDirect}
+	out, line, err := a.s.stepApp(context.Background(), sib, "trails.outing", cfg, flow.Vars{}, &store.Run{ID: int64(numOf(run, "id"))}, step, nil)
+	if err != nil || flow.Text(out["url"]) != trails.URL+"/outings/12" || !strings.Contains(line, "Outing planned: Hike: Trebević from Sarajevo") {
+		t.Fatalf("retry: %v %q %v", out, line, err)
+	}
+	mu.Lock()
+	if len(got) != 2 || got[1]["source_ref"] != got[0]["source_ref"] || got[1]["date"] != time.Now().Format("2006-01-02") || got[1]["route_id"] != nil || got[1]["start_time"] != nil {
+		t.Fatalf("the retry: %v", got)
+	}
+	mu.Unlock()
+
+	// a day or a time that is not one fails for good, before Trails is asked
+	for _, bad := range []map[string]string{{"date": "next Sunday"}, {"date": "2026-11-14", "start_time": "8 o'clock"}} {
+		if _, _, err := a.s.stepApp(context.Background(), sib, "trails.outing", bad, flow.Vars{}, &store.Run{ID: 99}, step, nil); err == nil || !strings.Contains(err.Error(), "is not") {
+			t.Fatalf("%v: %v", bad, err)
+		}
+	}
+	for _, key := range []string{"trails-overdue-push", "trails-done-note", "trails-today-task"} {
+		if r := a.ok(a.alice, "POST", "/api/v1/recipes/"+key, nil); r["enabled"] != false {
+			t.Fatalf("recipe %s: %v", key, r)
+		}
+	}
+}
+
 // Steps run in order, fill in placeholders, filters stop quietly, and a
 // failing address is retried later instead of failing at once.
 func TestEngine(t *testing.T) {

@@ -74,6 +74,7 @@ var Pickers = map[string]Picker{
 	"notes.folders":      {"notes", "notes:read", "/api/v1/folders", "path", ""},
 	"tables.tables":      {"tables", "tables:read", "/api/v1/bases", "id", "tables"},
 	"rentals.places":     {"rentals", "rentals:read", "/api/v1/properties", "id", ""},
+	"trails.routes":      {"trails", "trails:read", "/api/v1/routes", "id", ""},
 }
 
 // Apps are the Pocket apps whose events Flows can listen to (through an
@@ -172,6 +173,10 @@ var Apps = []App{
 		{"rentals.rent_due", "Rent is due today or in the next days (each morning)"}, {"rentals.rent_late", "Rent is late"}, {"rentals.payment_recorded", "A rent payment was recorded"},
 		{"rentals.lease_started", "A lease started"}, {"rentals.lease_ending", "A lease ends soon (30 and 7 days before, on the day, and when set in Rentals)"}, {"rentals.lease_ended", "A lease ended"},
 		{"rentals.request_created", "A repair was reported"}, {"rentals.request_done", "A repair was done"}}},
+	{"trails", "Pocket Trails", "mountain", []Topic{
+		{"trails.outing_planned", "An outing was planned"}, {"trails.outing_today", "An outing is today (each morning)"},
+		{"trails.outing_started", "You set off on an outing"}, {"trails.outing_done", "An outing is done"}, {"trails.outing_cancelled", "An outing was called off"},
+		{"trails.overdue", "Not back in time (your safety contact was emailed)"}, {"trails.route_saved", "A route was saved"}}},
 	{"ai", "Pocket AI", "sparkles", []Topic{{"ai.turn_finished", "Pocket AI finished a reply"}, {"ai.needs_input", "Pocket AI needs your answer"}, {"ai.schedule_attention", "A scheduled AI run needs attention"}}},
 }
 
@@ -218,7 +223,23 @@ var topicFields = map[string][]string{
 	"rentals.lease_ended":      leaseFields,
 	"rentals.request_created":  repairFields,
 	"rentals.request_done":     repairFields,
+
+	// Pocket Trails: date is the outing's day, start_time and back_by its
+	// times (back_by is 2026-11-14T18:00), distance_m and gain_m in metres,
+	// minutes the route's time, people names in one line; url opens the outing
+	"trails.outing_planned":   outingFields,
+	"trails.outing_today":     outingFields,
+	"trails.outing_started":   outingFields,
+	"trails.outing_done":      outingFields,
+	"trails.outing_cancelled": outingFields,
+	"trails.overdue":          append([]string{"contact_name", "alert_error", "start_lat", "start_lng"}, outingFields...),
+	"trails.route_saved":      {"route_id", "name", "activity", "distance_m", "gain_m", "minutes", "level", "url", "user_email"},
 }
+
+// outingFields are what every Pocket Trails outing event carries: activity
+// is hike, walk, run, bike, gravel, mtb, ski or other; status planned, out,
+// done or cancelled.
+var outingFields = []string{"outing_id", "title", "activity", "date", "start_time", "status", "route", "route_id", "distance_m", "gain_m", "minutes", "people", "back_by", "url", "user_email"}
 
 // leaseFields are what a Pocket Rentals lease started, ending or ended
 // carries: tenants and emails are lists, start and end dates, rent in cents a
@@ -389,6 +410,18 @@ var Steps = []StepKind{
 			{Key: "reported_by", Label: "Reported by (optional)", Type: "text", Placeholder: "{{name}}", Help: "A tenant's name, or who told you."},
 		},
 		Output: []string{"id", "title", "priority", "url"}},
+	{Kind: "trails.outing", App: "trails", Name: "Plan an outing in Pocket Trails", Icon: "mountain", Scopes: []string{"trails:write", "trails:read"},
+		Description: "A hike, walk, run or ride planned in Pocket Trails, on one of your routes or none: the day, when you set off, a name and notes. Trails puts it on your calendar like the others; telling someone if you are not back stays for you to switch on in Trails.",
+		Fields: []Field{
+			{Key: "route_id", Label: "Route (optional)", Type: "picker", Picker: "trails.routes", Help: "Empty = no route yet.", NoTemplate: true},
+			{Key: "date", Label: "Day", Type: "text", Placeholder: "{{date}}", Help: "YYYY-MM-DD; empty = today."},
+			{Key: "start_time", Label: "Setting off at (optional)", Type: "text", Placeholder: "08:00", Help: "HH:MM."},
+			{Key: "title", Label: "Name (optional)", Type: "text", Placeholder: "{{title}}", Help: "Empty = the route's name."},
+			{Key: "activity", Label: "Activity", Type: "select", Options: []Option{{"", "The route's (or your usual)"}, {"hike", "Hike"}, {"walk", "Walk"}, {"run", "Run"},
+				{"bike", "Ride"}, {"gravel", "Gravel ride"}, {"mtb", "Mountain-bike ride"}, {"ski", "Ski tour"}, {"other", "Something else"}}, NoTemplate: true},
+			{Key: "notes", Label: "Notes", Type: "textarea", Placeholder: "{{preview}}"},
+		},
+		Output: []string{"id", "title", "date", "start_time", "status", "url"}},
 }
 
 // StepByKind finds a step kind.
