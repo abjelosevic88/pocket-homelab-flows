@@ -3,6 +3,8 @@
 // sibling app through a Pocket Core link). The web UI builds its pickers from it.
 package catalog
 
+import "sort"
+
 // Option is one choice of a select field.
 type Option struct {
 	Value string `json:"value"`
@@ -151,7 +153,36 @@ var Apps = []App{
 	{"backups", "Pocket Backups", "database", []Topic{{"backups.run.finished", "A backup finished"}, {"backups.run.failed", "A backup failed"}}},
 	{"forms", "Pocket Forms", "list", []Topic{
 		{"forms.response_received", "Someone answered a form"}, {"forms.form_opened", "A form was opened for answers"}, {"forms.form_closed", "A form closed"}}},
+	{"crm", "Pocket CRM", "trending-up", []Topic{
+		{"crm.deal_created", "A deal was added"}, {"crm.deal_moved", "A deal moved to another stage"}, {"crm.deal_won", "A deal was won"}, {"crm.deal_lost", "A deal was lost"},
+		{"crm.steps_due", "Deal steps are due today (each morning)"}}},
 	{"ai", "Pocket AI", "sparkles", []Topic{{"ai.turn_finished", "Pocket AI finished a reply"}, {"ai.needs_input", "Pocket AI needs your answer"}, {"ai.schedule_attention", "A scheduled AI run needs attention"}}},
+}
+
+// dealFields are what every Pocket CRM deal event carries: value is in
+// cents, amount the same as a plain number (4500), url opens the deal.
+var dealFields = []string{"deal_id", "title", "stage", "status", "value", "amount", "currency", "contact_name", "contact_email", "company", "next_action", "next_due", "url", "user_email"}
+
+// topicFields are the fields some events carry, written down so a flow can
+// use them before the first such event has arrived.
+var topicFields = map[string][]string{
+	"crm.deal_created": dealFields,
+	"crm.deal_moved":   append([]string{"from_stage"}, dealFields...),
+	"crm.deal_won":     dealFields,
+	"crm.deal_lost":    dealFields,
+	"crm.steps_due":    {"date", "due", "overdue", "quiet", "text", "user_email"},
+}
+
+// TopicFields are the fields an event is known to carry, sorted (nil when
+// not written down: they come from the newest event then).
+func TopicFields(topic string) []string {
+	f := topicFields[topic]
+	if f == nil {
+		return nil
+	}
+	out := append([]string(nil), f...)
+	sort.Strings(out)
+	return out
 }
 
 // AppBySlug finds an app.

@@ -469,6 +469,11 @@ func (s *Server) handleFlowFields(w http.ResponseWriter, r *http.Request) {
 	if sample != nil {
 		fields = flow.Fields(sample, 3)
 	}
+	if sample == nil && kind == store.TriggerEvent && topic != "" {
+		if known := catalog.TopicFields(strings.Split(topic, ",")[0]); known != nil {
+			fields = append(known, "event.app", "event.at", "event.id", "event.name", "event.source", "event.subject", "event.topic")
+		}
+	}
 	if kind == store.TriggerSchedule {
 		fields = []string{"scheduled_for", "schedule"}
 	}

@@ -271,6 +271,40 @@ func TestFormsAnswerStartsAFlow(t *testing.T) {
 	}
 }
 
+// Pocket CRM deals start flows: Flows asks for events:read in CRM, a new
+// flow knows a deal's fields before the first event, and a won deal fills in
+// its title, amount and currency.
+func TestCRMDealWonStartsAFlow(t *testing.T) {
+	if !strings.Contains(fmt.Sprint(linkUses()), "crm [events:read]") || catalog.TopicName("crm.deal_won") == "" || catalog.TopicName("crm.steps_due") == "" {
+		t.Fatalf("CRM is not in the catalog: %v", linkUses())
+	}
+	a := newApp(t, nil)
+	fl := a.ok(a.alice, "GET", "/api/v1/flows/fields?kind=event&topic=crm.deal_moved", nil)
+	if got := fmt.Sprint(fl["fields"]); !strings.Contains(got, "from_stage") || !strings.Contains(got, "amount") || !strings.Contains(got, "event.topic") {
+		t.Fatalf("fields before the first event: %v", got)
+	}
+	sk, url := newSink(t)
+	f := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": "Won", "trigger_kind": "event",
+		"trigger": map[string]any{"topic": "crm.deal_won"},
+		"steps":   []map[string]any{{"kind": "http", "config": map[string]string{"method": "POST", "url": url, "body": "{{title}} {{amount}} {{currency}} {{value | cents}} {{url}}"}}}})
+	p, _ := json.Marshal(map[string]any{"user_email": "alice@example.com", "deal_id": 7, "title": "Shop for Marko", "stage": "Won", "status": "won",
+		"value": 450000, "amount": 4500, "currency": "EUR", "company": "Marko d.o.o.", "url": "https://crm.example/deals/7"})
+	a.s.handleEvent(context.Background(), core.Event{ID: 1, Topic: "crm.deal_won", Source: "crm", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	_, _, l := a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", int64(numOf(f, "id"))), nil)
+	if len(l) != 1 {
+		t.Fatalf("the flow ran %d times, want 1", len(l))
+	}
+	a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+	if got := sk.got(); len(got) != 1 || got[0] != "Shop for Marko 4500 EUR 4500.00 https://crm.example/deals/7" {
+		t.Fatalf("got %q", got)
+	}
+	for _, key := range []string{"deal-won-push", "deal-steps-push"} {
+		if r := a.ok(a.alice, "POST", "/api/v1/recipes/"+key, nil); r["enabled"] != false {
+			t.Fatalf("recipe %s: %v", key, r)
+		}
+	}
+}
+
 // Steps run in order, fill in placeholders, filters stop quietly, and a
 // failing address is retried later instead of failing at once.
 func TestEngine(t *testing.T) {
