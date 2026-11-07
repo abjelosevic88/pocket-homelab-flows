@@ -407,7 +407,8 @@ func (s *Server) stepApp(ctx context.Context, sib *siblingConn, kind string, cfg
 		default:
 			prio = "normal"
 		}
-		body := map[string]any{"property_id": id, "title": title, "priority": prio}
+		// ref: a retry of this step finds the repair it already reported
+		body := map[string]any{"property_id": id, "title": title, "priority": prio, "ref": fmt.Sprintf("pocket-flows:%d:%s", r.ID, step.ID)}
 		if d := strings.TrimSpace(cfg["details"]); d != "" {
 			body["details"] = d
 		}

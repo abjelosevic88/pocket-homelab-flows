@@ -17,6 +17,8 @@ import (
 	core "github.com/abjelosevic88/pocket-homelab-core/sdk"
 	"github.com/abjelosevic88/pocket-homelab-flows/internal/catalog"
 	"github.com/abjelosevic88/pocket-homelab-flows/internal/config"
+	"github.com/abjelosevic88/pocket-homelab-flows/internal/flow"
+	"github.com/abjelosevic88/pocket-homelab-flows/internal/pocket"
 	"github.com/abjelosevic88/pocket-homelab-flows/internal/store"
 )
 
@@ -445,7 +447,13 @@ func TestRentalsStartsAFlowAndReportsARepair(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			mu.Lock()
 			got = append(got, in)
+			again := len(got) > 1 && got[0]["ref"] == in["ref"]
 			mu.Unlock()
+			if again {
+				// the same ref twice: the repair it already made
+				_, _ = w.Write([]byte(`{"request": {"id": 21, "property_id": 3, "title": "Boiler is off", "priority": "urgent"}, "already": true}`))
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"request": {"id": 21, "property_id": 3, "title": "Boiler is off", "priority": "urgent"}}`))
 		default:
@@ -501,11 +509,27 @@ func TestRentalsStartsAFlowAndReportsARepair(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("repairs reported: %v", got)
 	}
-	if b := got[0]; numOf(b, "property_id") != 3 || b["title"] != "Boiler is off" || b["priority"] != "urgent" || b["details"] != "Boiler is off\nana@example.com" || b["reported_by"] != "Ana" {
+	if b := got[0]; numOf(b, "property_id") != 3 || b["title"] != "Boiler is off" || b["priority"] != "urgent" || b["details"] != "Boiler is off\nana@example.com" || b["reported_by"] != "Ana" ||
+		b["ref"] != fmt.Sprintf("pocket-flows:%d:s1", int64(numOf(run, "id"))) {
 		t.Fatalf("repair sent: %#v", b)
 	}
 	if out := fmt.Sprint(run); !strings.Contains(out, rentals.URL+"/repairs/21") {
 		t.Fatalf("the step's output has no link to the repair: %v", out)
+	}
+	mu.Unlock()
+
+	// a retry sends the same ref; Rentals answers 200 with the repair it
+	// already made, and the step still succeeds with its link
+	cfg := map[string]string{"property_id": "3", "priority": "urgent", "title": "Boiler is off"}
+	step := store.Step{ID: "s1", Kind: "rentals.repair", Config: cfg}
+	sib := &siblingConn{client: pocket.New(rentals.URL, "pt_rentals_token_1", 5*time.Second), public: rentals.URL, via: modeDirect}
+	out, line, err := a.s.stepApp(context.Background(), sib, "rentals.repair", cfg, flow.Vars{}, &store.Run{ID: int64(numOf(run, "id"))}, step, nil)
+	if err != nil || flow.Text(out["url"]) != rentals.URL+"/repairs/21" || !strings.Contains(line, "Repair reported") {
+		t.Fatalf("retry: %v %q %v", out, line, err)
+	}
+	mu.Lock()
+	if len(got) != 2 || got[1]["ref"] != got[0]["ref"] {
+		t.Fatalf("the retry sent another ref: %v", got)
 	}
 	for _, key := range []string{"rent-late-push", "lease-ending-task", "urgent-repair-push"} {
 		if r := a.ok(a.alice, "POST", "/api/v1/recipes/"+key, nil); r["enabled"] != false {
