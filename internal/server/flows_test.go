@@ -662,6 +662,71 @@ func TestTrailsStartsAFlowAndPlansAnOuting(t *testing.T) {
 	}
 }
 
+// Pocket Booking events start flows: Flows asks for events:read in Booking,
+// a booking's fields are known before the first event, and the recipes'
+// words come out right (the start in the owner's own time, guests' cancels only).
+func TestBookingStartsAFlow(t *testing.T) {
+	if !strings.Contains(fmt.Sprint(linkUses()), "booking [events:read]") {
+		t.Fatalf("Booking is not in the catalog: %v", linkUses())
+	}
+	for _, topic := range []string{"booking.booked", "booking.confirmed", "booking.declined", "booking.cancelled", "booking.moved", "booking.done", "booking.no_show"} {
+		if catalog.TopicName(topic) == "" || catalog.TopicFields(topic) == nil {
+			t.Fatalf("%s: no name or fields", topic)
+		}
+	}
+	a := newApp(t, nil)
+	fl := a.ok(a.alice, "GET", "/api/v1/flows/fields?kind=event&topic=booking.cancelled", nil)
+	if got := fmt.Sprint(fl["fields"]); !strings.Contains(got, "meeting_url") || !strings.Contains(got, "reason") || !strings.Contains(got, "start") {
+		t.Fatalf("fields before the first event: %v", got)
+	}
+	sk, url := newSink(t)
+	ids := map[string]int64{}
+	for _, key := range []string{"booking-booked-push", "booking-cancelled-push"} {
+		if r := a.ok(a.alice, "POST", "/api/v1/recipes/"+key, nil); r["enabled"] != false {
+			t.Fatalf("recipe %s: %v", key, r)
+		}
+		// the recipe's flow, with its push sent to the sink instead
+		var rc recipe
+		for _, x := range recipes {
+			if x.Key == key {
+				rc = x
+			}
+		}
+		n := rc.Flow.Steps[0].Config
+		f := a.ok(a.alice, "POST", "/api/v1/flows", map[string]any{"name": rc.Flow.Name, "trigger_kind": "event", "trigger": rc.Flow.Trigger,
+			"steps": []map[string]any{{"kind": "http", "config": map[string]string{"method": "POST", "url": url, "body": n["title"] + " | " + n["body"] + " | " + n["url"]}}}})
+		ids[key] = int64(numOf(f, "id"))
+	}
+	ctx := context.Background()
+	send := func(id int64, topic string, extra map[string]any) {
+		m := map[string]any{"user_email": "alice@example.com", "booking_id": 41, "type_id": 3, "type": "Intro call", "title": "Intro call",
+			"start": "2026-11-18T10:00:00+01:00", "end": "2026-11-18T10:30:00+01:00", "minutes": 30, "status": "confirmed",
+			"name": "Ana Marić", "email": "ana@example.com", "phone": "", "location": "", "meeting_url": "https://meet.jit.si/pocket-x",
+			"url": "https://booking.example/bookings/41", "source": "page"}
+		for k, v := range extra {
+			m[k] = v
+		}
+		p, _ := json.Marshal(m)
+		a.s.handleEvent(ctx, core.Event{ID: id, Topic: topic, Source: "booking", Payload: p, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	}
+	send(1, "booking.booked", map[string]any{"status": "pending"})
+	send(2, "booking.cancelled", map[string]any{"status": "cancelled", "by": "owner", "reason": ""})
+	send(3, "booking.cancelled", map[string]any{"status": "cancelled", "by": "guest", "reason": ""})
+	for key, want := range map[string]string{
+		"booking-booked-push":    "Ana Marić booked Intro call | 18.11. 10:00 · 30 min · ana@example.com · pending | https://booking.example/bookings/41",
+		"booking-cancelled-push": "Cancelled: Intro call with Ana Marić | 18.11. 10:00 is free again. No reason given. | https://booking.example/bookings/41",
+	} {
+		_, _, l := a.call(a.alice, "GET", fmt.Sprintf("/api/v1/runs?flow=%d", ids[key]), nil)
+		if len(l) != 1 {
+			t.Fatalf("%s ran %d times, want 1", key, len(l))
+		}
+		a.waitRun(a.alice, int64(numOf(l[0].(map[string]any), "id")))
+		if got := strings.Join(sk.got(), "\n"); !strings.Contains(got, want) {
+			t.Fatalf("%s: got %q, want %q", key, got, want)
+		}
+	}
+}
+
 // Steps run in order, fill in placeholders, filters stop quietly, and a
 // failing address is retried later instead of failing at once.
 func TestEngine(t *testing.T) {

@@ -177,6 +177,10 @@ var Apps = []App{
 		{"trails.outing_planned", "An outing was planned"}, {"trails.outing_today", "An outing is today (each morning)"},
 		{"trails.outing_started", "You set off on an outing"}, {"trails.outing_done", "An outing is done"}, {"trails.outing_cancelled", "An outing was called off"},
 		{"trails.overdue", "Not back in time (your safety contact was emailed)"}, {"trails.route_saved", "A route was saved"}}},
+	{"booking", "Pocket Booking", "calendar-check", []Topic{
+		{"booking.booked", "Someone booked a time"}, {"booking.confirmed", "You confirmed a booking that waited"}, {"booking.declined", "You said no to a booking that waited"},
+		{"booking.cancelled", "A booking was cancelled"}, {"booking.moved", "A booking moved to another time"},
+		{"booking.done", "A booking happened"}, {"booking.no_show", "Someone did not come to a booking"}}},
 	{"ai", "Pocket AI", "sparkles", []Topic{{"ai.turn_finished", "Pocket AI finished a reply"}, {"ai.needs_input", "Pocket AI needs your answer"}, {"ai.schedule_attention", "A scheduled AI run needs attention"}}},
 }
 
@@ -234,7 +238,24 @@ var topicFields = map[string][]string{
 	"trails.outing_cancelled": outingFields,
 	"trails.overdue":          append([]string{"contact_name", "alert_error", "start_lat", "start_lng"}, outingFields...),
 	"trails.route_saved":      {"route_id", "name", "activity", "distance_m", "gain_m", "minutes", "level", "url", "user_email"},
+
+	// Pocket Booking: type is the booking page's name, title the booking's
+	// own; start and end are RFC 3339 in your zone ({{start | date: DD.MM. HH:mm}}),
+	// name, email and phone the guest's; status pending, confirmed, declined,
+	// cancelled, done or no_show; source page, invite, owner or the app that
+	// booked; url opens the booking. A cancel says by (guest or owner) and
+	// reason, a move from (the old start)
+	"booking.booked":    bookingFields,
+	"booking.confirmed": bookingFields,
+	"booking.declined":  bookingFields,
+	"booking.cancelled": append([]string{"by", "reason"}, bookingFields...),
+	"booking.moved":     append([]string{"from"}, bookingFields...),
+	"booking.done":      bookingFields,
+	"booking.no_show":   bookingFields,
 }
+
+// bookingFields are what every Pocket Booking event carries.
+var bookingFields = []string{"booking_id", "type_id", "type", "title", "start", "end", "minutes", "status", "name", "email", "phone", "location", "meeting_url", "url", "source", "user_email"}
 
 // outingFields are what every Pocket Trails outing event carries: activity
 // is hike, walk, run, bike, gravel, mtb, ski or other; status planned, out,
