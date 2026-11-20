@@ -349,5 +349,9 @@ func (s *Server) handleImportN8N(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, res)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"results": out})
+	counts := map[string]int{"created": 0, "exists": 0, "failed": 0}
+	for _, res := range out {
+		counts[res.Status]++
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": out, "created": counts["created"], "existing": counts["exists"], "failed": counts["failed"]})
 }

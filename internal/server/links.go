@@ -21,6 +21,19 @@ var linkOffers = []core.Offer{
 	{Scope: "flows:run", Name: "Run your flows", Description: "Start one of your flows that is set to run by hand, with some input. It cannot change or create flows."},
 }
 
+// portable is what Pocket Move may copy out and bring in for a person
+// (docs/move.md in pocket-homelab-core); Register adds move:export/import.
+var portable = &core.Portable{
+	Exports: []core.PortableExport{
+		{Path: "/api/v1/export.json", File: "flows.json", Kind: core.KindPocket, Title: "Every flow you made, with its trigger and steps (never the secret webhook addresses)"},
+		{Path: "/api/v1/export.csv", File: "runs.csv", Kind: core.KindCSV, Title: "Your run history as a table: what ran, when, and whether it worked"},
+	},
+	Imports: []core.PortableImport{
+		{Path: "/api/v1/import", Kind: core.KindPocket, ContentType: "application/json", MaxBytes: 32 << 20, Title: "Adds the flows from another box, switched off; flows you already have are skipped"},
+		{Path: "/api/v1/import/n8n", Kind: "n8n-workflows", ContentType: "application/json", Title: "Turns n8n workflows into flows, switched off; a second run adds nothing"},
+	},
+}
+
 type linkRoute struct {
 	methods string
 	path    *regexp.Regexp
@@ -38,6 +51,9 @@ var errLinkScope = errors.New("outside the link's scope")
 
 // linkAllows reports whether a link token with these scopes may make this request.
 func linkAllows(scopes []string, r *http.Request) bool {
+	if portable.LinkAllows(scopes, r) {
+		return true
+	}
 	for _, lr := range linkRoutes {
 		if !strings.Contains(" "+lr.methods+" ", " "+r.Method+" ") || !lr.path.MatchString(r.URL.Path) {
 			continue

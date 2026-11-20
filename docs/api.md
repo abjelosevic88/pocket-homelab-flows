@@ -52,12 +52,13 @@ JSON over HTTP under `/api/v1`. Authenticate with the session cookie, a personal
 | `GET /catalog` | Apps (events, whether Flows hears them and can act in them for you), step kinds, comparisons |
 | `GET /pickers?name=tasks.lists` | A list from a sibling app for a step's select (`tasks.lists`, `calendar.calendars`, `money.accounts`, `money.categories`, `habits.habits`, `inventory.items`, `projects.teams`, `notes.folders`) |
 | `GET /recipes`, `POST /recipes/{key}` | Ready-made flows; using one creates it switched off |
-| `POST /import/n8n` | An n8n workflow export (one, a list, or `{"data": [...]}`) → flows, switched off; idempotent |
+| `POST /import/n8n` | An n8n workflow export (one, a list, or `{"data": [...]}`) → flows, switched off; idempotent; answers `results` plus the `created`/`existing`/`failed` counts |
 | `POST /ai/draft` `{text}` | Draft a flow from a sentence (not saved) |
 | `GET /ai/status`, `GET /ai/models` | |
 | `GET/PUT /settings` | Your settings; `connections: {"tasks": {"mode": "direct", "url": "…", "token": "…"}}` |
 | `GET /export.json`, `POST /import` | Your flows; importing twice adds nothing |
 | `GET /export.csv` | Your run history |
+| `GET /pocket/portable` | Pocket Move can copy your flows out (`export.json`, `export.csv`, link scope `move:export`) and bring flows in (`POST /import`, `POST /import/n8n`, `move:import`) |
 | `GET /backup` | The whole database (admins) |
 
 Public: `/healthz` (`{status, version, uptime, core_outbox}`), `/readyz`, `/metrics` (`pocket_flows_*`), `/pocket-ask.js`.
